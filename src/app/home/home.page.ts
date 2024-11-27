@@ -1,91 +1,108 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
-import { io } from 'socket.io-client';
+import { AlertController } from '@ionic/angular';
+import { WebrtcService } from '../services/webrtc.service';
 
 @Component({
   selector: 'app-home',
-  templateUrl: './home.page.html',
-  styleUrls: ['./home.page.scss'],
+  template: `
+    <ion-header [translucent]="true">
+      <ion-toolbar>
+        <ion-title>
+          WebRTC Video Call
+        </ion-title>
+      </ion-toolbar>
+    </ion-header>
+
+    <ion-content [fullscreen]="true">
+      <div class="video-container">
+        <!-- Remote Videos -->
+        <ion-card *ngFor="let remoteStream of remoteStreams">
+          <ion-card-header>
+            <ion-card-title>Remote Participant</ion-card-title>
+          </ion-card-header>
+          <ion-card-content>
+            <video 
+              autoplay 
+              playsinline
+              [srcObject]="remoteStream"
+            ></video>
+          </ion-card-content>
+        </ion-card>
+      </div>
+
+      <!-- Call Controls -->
+      <ion-fab vertical="bottom" horizontal="center" slot="fixed">
+        <ion-fab-button 
+          color="primary"
+          (click)="initiateCall()"
+          [disabled]="isCallInProgress">
+          <ion-icon name="call"></ion-icon>
+        </ion-fab-button>
+        <ion-fab-button 
+          color="danger" 
+          (click)="endCall()"
+          [disabled]="!isCallInProgress">
+          <ion-icon name="call"></ion-icon>
+        </ion-fab-button>
+      </ion-fab>
+    </ion-content>
+  `,
+  styleUrls: ['home.page.scss']
 })
 export class HomePage implements OnInit, OnDestroy {
-  private socket: any;
-  private peerConnection: RTCPeerConnection | undefined;
-  remoteStream: MediaStream | undefined;
+  isCallInProgress = false;
+  remoteStreams: MediaStream[] = [];
 
-  constructor() {}
+  constructor(
+    private webrtcService: WebrtcService,
+    private alertController: AlertController
+  ) {}
 
-  ngOnInit() {
-    this.setupWebRTC();
-  }
-
-  setupWebRTC() {
-    this.socket = io('http://localhost:3000');
-    this.peerConnection = new RTCPeerConnection();
-
-    // Set up remote stream
-    this.peerConnection.ontrack = (event) => {
-      const [stream] = event.streams;
-      this.remoteStream = stream;
-
-      // Clear existing remote videos
-      const container = document.getElementById('remoteContainer');
-      if (container) {
-        container.innerHTML = ''; // Remove old videos
-        const remoteVideo = document.createElement('video');
-        remoteVideo.srcObject = stream;
-        remoteVideo.autoplay = true;
-        remoteVideo.playsInline = true;
-        container.appendChild(remoteVideo);
-      }
-    };
-
-    // Handle offer from backend
-    this.socket.on('offer', (offer: RTCSessionDescriptionInit) => {
-      this.peerConnection
-        ?.setRemoteDescription(new RTCSessionDescription(offer))
-        .then(() => this.peerConnection?.createAnswer())
-        .then((answer) => {
-          this.peerConnection?.setLocalDescription(answer);
-          this.socket.emit('answer', answer);
-        })
-        .catch((error) => console.error('Error handling offer:', error));
-    });
-
-    // Handle ICE candidates
-    this.socket.on('ice-candidate', (candidate: RTCIceCandidateInit) => {
-      this.peerConnection?.addIceCandidate(new RTCIceCandidate(candidate)).catch((error) => {
-        console.error('Error adding ICE candidate:', error);
+  async ngOnInit() {
+    try {
+      console.log('Initializing...');
+      this.webrtcService.remoteStreams$.subscribe((streams) => {
+        this.remoteStreams = streams;
+        console.log('Remote streams updated:', this.remoteStreams);
       });
-    });
+    } catch (error) {
+      this.showErrorAlert('Initialization Failed', error);
+    }
   }
 
-  endCall() {
-    // Disconnect the socket
-    if (this.socket) {
-      this.socket.disconnect();
+  async initiateCall() {
+    try {
+      console.log('Starting call...');
+      await this.webrtcService.initiateCall('default-room');
+      this.isCallInProgress = true;
+    } catch (error) {
+      console.error('Error initiating call:', error);
+      this.showErrorAlert('Call Initiation Failed', error);
     }
+  }
 
-    // Close peer connection
-    if (this.peerConnection) {
-      this.peerConnection.close();
-      this.peerConnection = undefined;
+  async endCall() {
+    try {
+      console.log('Ending call...');
+      await this.webrtcService.endCall();
+      this.isCallInProgress = false;
+    } catch (error) {
+      console.error('Error ending call:', error);
+      this.showErrorAlert('End Call Failed', error);
     }
+  }
 
-    // Stop remote stream
-    if (this.remoteStream) {
-      this.remoteStream.getTracks().forEach((track) => track.stop());
-      this.remoteStream = undefined;
-    }
-
-    // Clear remote video container
-    const container = document.getElementById('remoteContainer');
-    if (container) {
-      container.innerHTML = ''; // Remove video elements
-    }
-
-    alert('Call ended.');
+  async showErrorAlert(header: string, error: any) {
+    const alert = await this.alertController.create({
+      header: header,
+      message: error.message || 'An unexpected error occurred',
+      buttons: ['OK']
+    });
+    await alert.present();
   }
 
   ngOnDestroy() {
-    this.endCall(); // Cleanup on component destroy
+    console.log('Cleaning up resources...');
+    this.webrtcService.cleanup();
   }
 }
